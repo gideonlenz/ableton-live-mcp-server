@@ -80,14 +80,33 @@ class AbletonOSCDaemon:
                     message = json.loads(data.decode())
                     print(f"[RECEIVED MESSAGE] From {client_address}: {message}")
                     
-                    command = message.get('command')
-
+                    # Detect JSON-RPC vs Flat protocol
+                    is_jsonrpc = 'jsonrpc' in message or 'method' in message
+                    request_id = message.get('id')
                     
-                    if command == 'send_message':
-                        # Extract OSC message details
+                    if is_jsonrpc:
+                        command = message.get('method')
+                        params = message.get('params', {})
+                        address = params.get('address')
+                        args = params.get('args', [])
+                    else:
+                        command = message.get('command')
                         address = message.get('address')
                         args = message.get('args', [])
-                        
+                    
+                    # Helper function to send the response back in the correct format
+                    def send_response(response_dict):
+                        if is_jsonrpc:
+                            resp = {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "result": response_dict
+                            }
+                        else:
+                            resp = response_dict
+                        writer.write(json.dumps(resp).encode())
+                    
+                    if command == 'send_message':
                         # For commands that expect responses, set up a future
                         if address.startswith(('/live/device/get', '/live/scene/get', '/live/view/get', '/live/clip/get', '/live/clip_slot/get', '/live/track/get', '/live/song/get', '/live/api/get', '/live/application/get', '/live/test', '/live/error')):
                             # Create response future with timeout
@@ -101,20 +120,20 @@ class AbletonOSCDaemon:
                                 # Wait for response with timeout
                                 response = await asyncio.wait_for(future, timeout=5.0)
                                 print(f"[OSC RESPONSE] Received: {response}")
-                                writer.write(json.dumps(response).encode())
+                                send_response(response)
                             except asyncio.TimeoutError:
                                 response = {
                                     'status': 'error',
                                     'message': f'Timeout waiting for response to {address}'
                                 }
                                 print(f"[OSC TIMEOUT] {response}")
-                                writer.write(json.dumps(response).encode())
+                                send_response(response)
                                 
                         else:
                             # For commands that don't expect responses
                             self.osc_client.send_message(address, args)
                             response = {'status': 'sent'}
-                            writer.write(json.dumps(response).encode())
+                            send_response(response)
                             
                     elif command == 'get_status':
                         response = {
@@ -123,11 +142,11 @@ class AbletonOSCDaemon:
                             'receive_port': self.receive_port
                         }
                         print(f"[STATUS REQUEST] Responding with: {response}")
-                        writer.write(json.dumps(response).encode())
+                        send_response(response)
                     else:
                         response = {'status': 'error', 'message': 'Unknown command'}
                         print(f"[UNKNOWN COMMAND] Received: {message}")
-                        writer.write(json.dumps(response).encode())
+                        send_response(response)
                     
                     await writer.drain()
                     

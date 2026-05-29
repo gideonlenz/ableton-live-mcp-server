@@ -1,0 +1,1 @@
+https://github.com/gideonlenz/ableton-live-mcp-server.git
